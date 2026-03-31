@@ -54,3 +54,10 @@ def test_parse_no_title_raises():
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+def test_parse_second_h1_becomes_paragraph():
+    text = "# 제목\n\n# 두번째 제목\n\n## 섹션\n내용"
+    result = parse_blog_response(text)
+    assert result["title"] == "제목"
+    # second # line → paragraph without # prefix
+    assert ("paragraph", "두번째 제목") in result["blocks"]

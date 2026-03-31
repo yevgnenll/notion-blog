@@ -68,6 +68,8 @@ def parse_blog_response(text: str) -> dict:
             continue
         if stripped.startswith("# ") and title is None:
             title = stripped[2:].strip()
+        elif stripped.startswith("# "):
+            blocks.append(("paragraph", stripped[2:].strip()))
         elif stripped.lower().startswith("태그:"):
             raw = stripped.split(":", 1)[1]
             tags = [t.strip() for t in raw.split(",") if t.strip()]
