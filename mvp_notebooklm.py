@@ -110,7 +110,7 @@ def create_notebook(title: Optional[str] = None):
 def query_notebook(notebook_id: Optional[str] = None):
     """Ask a question to a notebook."""
     # Fixed notebook ID - always use this notebook
-    notebook_id = "b545cc09-cc49-4dd7-bd87-170c44c53ef6"
+    notebook_id = NOTEBOOK_ID
     
     # Optional: Verify the notebook exists
     try:
