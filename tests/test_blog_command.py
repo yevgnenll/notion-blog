@@ -144,3 +144,14 @@ def test_generate_blog_calls_notebooklm_and_notion():
 
     assert result["notion_url"] == "https://notion.so/pg-1"
     assert result["title"] == "양자컴퓨팅의 미래"
+
+
+import subprocess
+
+def test_blog_command_help_shows_in_help():
+    result = subprocess.run(
+        ["python", "mvp_notebooklm.py", "--help"],
+        cwd="/Users/yevgnenll/dev/blog-generator",
+        capture_output=True, text=True
+    )
+    assert "blog" in result.stdout or "blog" in result.stderr

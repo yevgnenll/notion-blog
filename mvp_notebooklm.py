@@ -387,13 +387,16 @@ Commands:
   create [title]    Create a new notebook (optionally with title)
   query [id]        Ask questions to a notebook
   add <id> <url>    Add a URL source to a notebook
-  
+  blog [topic]      Generate a blog post (optionally with topic)
+
 Examples:
   python mvp_notebooklm.py list
   python mvp_notebooklm.py create "My Research"
   python mvp_notebooklm.py query
   python mvp_notebooklm.py query abc123def456 "What is this about?"
   python mvp_notebooklm.py add abc123def456 https://example.com
+  python mvp_notebooklm.py blog "양자컴퓨팅의 미래"
+  python mvp_notebooklm.py blog
 
 Environment Variables:
   NOTEBOOKLM_COOKIES   Chrome cookies for authentication
@@ -423,9 +426,9 @@ Examples:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["list", "create", "query", "add", "help"],
+        choices=["list", "create", "query", "add", "blog", "help"],
         default="help",
-        help="Command to run: list, create, query, add, help"
+        help="Command to run: list, create, query, add, blog, help"
     )
     parser.add_argument(
         "args",
@@ -448,6 +451,22 @@ Examples:
             add_source(args.args[0], args.args[1])
         else:
             print("Usage: python mvp_notebooklm.py add <notebook_id> <url>")
+            sys.exit(1)
+    elif args.command == "blog":
+        topic = args.args[0] if args.args else input("블로그 주제를 입력하세요: ").strip()
+        if not topic:
+            print("주제가 필요합니다.")
+            sys.exit(1)
+        print_header(f"블로그 생성: {topic}")
+        try:
+            result = generate_blog(topic)
+            print(f"\n✓ 블로그 포스트가 Notion에 게시되었습니다!")
+            print(f"  제목:  {result['title']}")
+            print(f"  슬러그: {result['slug']}")
+            print(f"  태그:  {', '.join(result['tags'])}")
+            print(f"  URL:  {result['notion_url']}")
+        except Exception as e:
+            print(f"Error: {e}")
             sys.exit(1)
 
 
