@@ -45,6 +45,43 @@ def make_slug(title: str) -> str:
     return slug.strip("-")
 
 
+def parse_blog_response(text: str) -> dict:
+    """
+    Parse NotebookLM blog-format response.
+
+    Returns:
+        {
+            "title": str,
+            "tags": list[str],
+            "blocks": list[tuple[str, str]]  # (type, content)
+        }
+    Raises:
+        ValueError if no title found.
+    """
+    title = None
+    tags = []
+    blocks = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# ") and title is None:
+            title = stripped[2:].strip()
+        elif stripped.lower().startswith("태그:"):
+            raw = stripped.split(":", 1)[1]
+            tags = [t.strip() for t in raw.split(",") if t.strip()]
+        elif stripped.startswith("## "):
+            blocks.append(("heading_2", stripped[3:].strip()))
+        else:
+            blocks.append(("paragraph", stripped))
+
+    if title is None:
+        raise ValueError("No title found in NotebookLM response (expected '# title' line)")
+
+    return {"title": title, "tags": tags, "blocks": blocks}
+
+
 def print_header(title: str):
     """Print a formatted header."""
     print(f"\n{'=' * 60}")
