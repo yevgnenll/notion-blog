@@ -26,6 +26,7 @@ import sys
 import json
 import argparse
 import re
+import requests
 from datetime import date
 from typing import Optional
 
@@ -82,6 +83,85 @@ def parse_blog_response(text: str) -> dict:
         raise ValueError("No title found in NotebookLM response (expected '# title' line)")
 
     return {"title": title, "tags": tags, "blocks": blocks}
+
+
+def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
+    """
+    Create a Notion page via REST API.
+
+    Args:
+        title: Page title
+        tags: List of tag strings
+        blocks: List of (type, content) tuples — ("heading_2"|"paragraph", text)
+        slug: URL slug for cleanUrl code block
+
+    Returns:
+        Created page dict (id, url, ...)
+    """
+    api_key = os.environ.get("NOTION_INTEGRATION_KEY") or os.environ.get("NOTION_API_KEY")
+    database_id = os.environ.get("NOTION_DATABASE_ID")
+    if not api_key:
+        raise ValueError("NOTION_INTEGRATION_KEY environment variable is required")
+    if not database_id:
+        raise ValueError("NOTION_DATABASE_ID environment variable is required")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    # Build content blocks
+    children = [
+        {
+            "object": "block",
+            "type": "code",
+            "code": {
+                "language": "yaml",
+                "rich_text": [{"type": "text", "text": {"content": f"cleanUrl: /posts/{slug}"}}],
+            },
+        }
+    ]
+    for block_type, content in blocks:
+        if block_type == "heading_2":
+            children.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+            })
+        else:
+            children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+            })
+
+    payload = {
+        "parent": {"type": "database_id", "database_id": database_id},
+        "properties": {
+            "Name": {
+                "title": [{"type": "text", "text": {"content": title}}]
+            },
+            "태그": {
+                "multi_select": [{"name": t} for t in tags]
+            },
+            "공개여부": {
+                "checkbox": False
+            },
+            "작성일자": {
+                "date": {"start": date.today().isoformat()}
+            },
+        },
+        "children": children,
+    }
+
+    resp = requests.post(
+        "https://api.notion.com/v1/pages",
+        headers=headers,
+        json=payload,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def print_header(title: str):
