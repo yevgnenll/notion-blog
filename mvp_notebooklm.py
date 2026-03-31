@@ -19,6 +19,8 @@ Environment Variables:
 ---------------------
 NOTEBOOKLM_COOKIES - Chrome cookies for authentication (optional)
 NOTEBOOKLM_QUERY_TIMEOUT - Query timeout in seconds (default: 120)
+NOTION_INTEGRATION_KEY - Notion Integration token (required for Notion integration)
+NOTION_DATABASE_ID - Blog posts database ID (required for Notion integration)
 """
 
 import os
