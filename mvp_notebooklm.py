@@ -192,7 +192,7 @@ def generate_blog(topic: str) -> dict:
     Returns:
         dict with title, slug, tags, notion_url, notion_id
     """
-    prompt = BLOG_PROMPT_TEMPLATE.format(topic=topic)
+    prompt = BLOG_PROMPT_TEMPLATE.replace("{topic}", topic)
 
     client = get_client()
     result = chat.query(
@@ -208,6 +208,8 @@ def generate_blog(topic: str) -> dict:
     tags = parsed["tags"]
     blocks = parsed["blocks"]
     slug = make_slug(title)
+    if not slug:
+        slug = date.today().isoformat()
 
     page = post_to_notion(title=title, tags=tags, blocks=blocks, slug=slug)
 
