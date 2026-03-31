@@ -41,11 +41,21 @@ NOTEBOOK_ID = "b545cc09-cc49-4dd7-bd87-170c44c53ef6"
 
 
 def make_slug(title: str) -> str:
-    """Convert title to URL-safe slug."""
+    """Convert title to URL-safe slug. Falls back to Ollama for non-ASCII titles."""
+    from utils.ollama import translate_title_to_slug
+
     slug = title.lower().strip()
     slug = re.sub(r"[^a-z0-9\s-]", "", slug)
     slug = re.sub(r"[\s-]+", "-", slug)
-    return slug.strip("-")
+    slug = slug.strip("-")
+
+    if not slug:
+        try:
+            slug = translate_title_to_slug(title)
+        except Exception:
+            pass
+
+    return slug or date.today().isoformat()
 
 
 def parse_blog_response(text: str) -> dict:
@@ -141,7 +151,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     payload = {
         "parent": {"type": "database_id", "database_id": database_id},
         "properties": {
-            "Name": {
+            "제목": {
                 "title": [{"type": "text", "text": {"content": title}}]
             },
             "태그": {
@@ -162,7 +172,8 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
         headers=headers,
         json=payload,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise ValueError(f"Notion API error {resp.status_code}: {resp.text}")
     return resp.json()
 
 
