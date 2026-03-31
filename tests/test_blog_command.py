@@ -102,3 +102,45 @@ def test_post_to_notion_sends_correct_payload():
     # Check heading_2 block
     assert children[1]["type"] == "heading_2"
     assert children[2]["type"] == "paragraph"
+
+
+from mvp_notebooklm import generate_blog
+
+MOCK_NLM_RESPONSE = """# 양자컴퓨팅의 미래
+
+태그: 기술, 과학, 미래
+
+## 서론
+양자컴퓨팅은 매우 혁신적인 기술이다.
+
+## 결론
+앞으로 더 발전할 것이다.
+"""
+
+def test_generate_blog_calls_notebooklm_and_notion():
+    mock_chat_result = {"answer": MOCK_NLM_RESPONSE, "conversation_id": "conv-1"}
+
+    with patch("mvp_notebooklm.chat.query", return_value=mock_chat_result) as mock_query, \
+         patch("mvp_notebooklm.get_client") as mock_get_client, \
+         patch("mvp_notebooklm.post_to_notion", return_value={"id": "pg-1", "url": "https://notion.so/pg-1"}) as mock_notion:
+        result = generate_blog("양자컴퓨팅의 미래")
+
+    mock_query.assert_called_once()
+    call_kwargs = mock_query.call_args
+    # Prompt must contain the topic
+    query_text = (
+        call_kwargs.kwargs.get("query_text")
+        or (call_kwargs[1].get("query_text") if call_kwargs[1] else None)
+        or (call_kwargs[0][2] if len(call_kwargs[0]) > 2 else None)
+    )
+    assert query_text is not None, "query_text not found in call args"
+    assert "양자컴퓨팅의 미래" in query_text
+
+    mock_notion.assert_called_once()
+    notion_call = mock_notion.call_args
+    notion_kwargs = notion_call.kwargs if notion_call.kwargs else notion_call[1]
+    assert notion_kwargs["title"] == "양자컴퓨팅의 미래"
+    assert "기술" in notion_kwargs["tags"]
+
+    assert result["notion_url"] == "https://notion.so/pg-1"
+    assert result["title"] == "양자컴퓨팅의 미래"

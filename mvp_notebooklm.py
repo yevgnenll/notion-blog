@@ -164,6 +164,62 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     return resp.json()
 
 
+BLOG_PROMPT_TEMPLATE = """\
+다음 주제로 블로그 포스트를 작성해줘.
+반드시 아래 형식을 따라줘:
+
+# 제목
+
+태그: tag1, tag2, tag3
+
+## 소제목1
+내용...
+
+## 소제목2
+내용...
+
+주제: {topic}"""
+
+
+def generate_blog(topic: str) -> dict:
+    """
+    Query NotebookLM with a blog-format prompt, parse the response,
+    and publish to Notion.
+
+    Args:
+        topic: Blog post topic
+
+    Returns:
+        dict with title, slug, tags, notion_url, notion_id
+    """
+    prompt = BLOG_PROMPT_TEMPLATE.format(topic=topic)
+
+    client = get_client()
+    result = chat.query(
+        client,
+        notebook_id=NOTEBOOK_ID,
+        query_text=prompt,
+        conversation_id=None,
+    )
+    response_text = result["answer"]
+
+    parsed = parse_blog_response(response_text)
+    title = parsed["title"]
+    tags = parsed["tags"]
+    blocks = parsed["blocks"]
+    slug = make_slug(title)
+
+    page = post_to_notion(title=title, tags=tags, blocks=blocks, slug=slug)
+
+    return {
+        "title": title,
+        "slug": slug,
+        "tags": tags,
+        "notion_url": page.get("url", ""),
+        "notion_id": page.get("id", ""),
+    }
+
+
 def print_header(title: str):
     """Print a formatted header."""
     print(f"\n{'=' * 60}")
