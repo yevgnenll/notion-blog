@@ -179,7 +179,8 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
 
 BLOG_PROMPT_TEMPLATE = """\
 다음 주제로 블로그 포스트를 작성해줘.
-반드시 아래 형식을 따라줘:
+길이는 3000자 이상으로 SEO 최적화를 맞춰줘 (https://developers.google.com/search/docs/fundamentals/seo-starter-guide)
+그리고 반드시 아래 형식을 따라줘:
 
 # 제목
 
@@ -192,6 +193,36 @@ BLOG_PROMPT_TEMPLATE = """\
 내용...
 
 주제: {topic}"""
+
+
+def build_reference_blocks(references: list, citations: dict, source_title_map: dict) -> list:
+    """
+    Build Notion blocks for the references section.
+
+    Args:
+        references: List of {source_id, citation_number, cited_text?} dicts
+        citations: Dict mapping citation_number -> source_id
+        source_title_map: Dict mapping source_id -> source title
+
+    Returns:
+        List of (type, content) tuples to append to blocks
+    """
+    if not citations:
+        return []
+
+    ref_blocks = [("heading_2", "참고문헌")]
+    for ref in references:
+        num = ref["citation_number"]
+        source_id = ref["source_id"]
+        source_title = source_title_map.get(source_id, source_id)
+        cited_text = ref.get("cited_text", "")
+        if cited_text:
+            # Truncate long cited text to keep blocks readable
+            excerpt = cited_text[:300] + ("…" if len(cited_text) > 300 else "")
+            ref_blocks.append(("paragraph", f"[{num}] {source_title} — {excerpt}"))
+        else:
+            ref_blocks.append(("paragraph", f"[{num}] {source_title}"))
+    return ref_blocks
 
 
 def generate_blog(topic: str) -> dict:
@@ -215,11 +246,25 @@ def generate_blog(topic: str) -> dict:
         conversation_id=None,
     )
     response_text = result["answer"]
+    citations = result.get("citations", {})
+    references = result.get("references", [])
 
     parsed = parse_blog_response(response_text)
     title = parsed["title"]
     tags = parsed["tags"]
     blocks = parsed["blocks"]
+
+    # Build source title map from notebook metadata and append references section
+    if citations:
+        source_title_map = {}
+        try:
+            nb_detail = notebooks.get_notebook(client, NOTEBOOK_ID)
+            for src in nb_detail.get("sources", []):
+                source_title_map[src["id"]] = src["title"]
+        except Exception:
+            pass
+        blocks += build_reference_blocks(references, citations, source_title_map)
+
     slug = make_slug(title)
     if not slug:
         slug = date.today().isoformat()
