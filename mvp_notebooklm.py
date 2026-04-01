@@ -214,7 +214,8 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     for ref in references:
         num = ref["citation_number"]
         source_id = ref["source_id"]
-        source_title = source_title_map.get(source_id, source_id)
+        raw_title = source_title_map.get(source_id, source_id)
+        source_title = os.path.splitext(raw_title)[0]
         cited_text = ref.get("cited_text", "")
         if cited_text:
             # Truncate long cited text to keep blocks readable
