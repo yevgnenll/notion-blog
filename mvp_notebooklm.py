@@ -29,6 +29,7 @@ import json
 import argparse
 import re
 import requests
+from pathlib import Path
 from datetime import date
 from typing import Optional
 
@@ -177,9 +178,25 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     return resp.json()
 
 
+_SEO_GUIDE_PATH = Path(__file__).parent / "docs" / "seo-strategy.md"
+
+
+def _load_seo_guide() -> str:
+    """Load the SEO strategy guide if available."""
+    try:
+        return _SEO_GUIDE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
 BLOG_PROMPT_TEMPLATE = """\
 다음 주제로 블로그 포스트를 작성해줘.
-길이는 3000자 이상으로 SEO 최적화를 맞춰줘 (https://developers.google.com/search/docs/fundamentals/seo-starter-guide)
+길이는 3000자 이상으로 아래 SEO 전략 가이드를 반드시 준수해줘.
+
+--- SEO 전략 가이드 시작 ---
+{seo_guide}
+--- SEO 전략 가이드 끝 ---
+
 그리고 반드시 아래 형식을 따라줘:
 
 # 제목
@@ -237,7 +254,7 @@ def generate_blog(topic: str) -> dict:
     Returns:
         dict with title, slug, tags, notion_url, notion_id
     """
-    prompt = BLOG_PROMPT_TEMPLATE.replace("{topic}", topic)
+    prompt = BLOG_PROMPT_TEMPLATE.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
 
     client = get_client()
     result = chat.query(
