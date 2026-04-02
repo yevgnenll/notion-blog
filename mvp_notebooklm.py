@@ -29,6 +29,7 @@ import json
 import argparse
 import re
 import requests
+from pathlib import Path
 from datetime import date
 from typing import Optional
 
@@ -177,9 +178,26 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     return resp.json()
 
 
+_SEO_GUIDE_PATH = Path(__file__).parent / "docs" / "seo-strategy.md"
+
+
+def _load_seo_guide() -> str:
+    """Load the SEO strategy guide if available."""
+    try:
+        return _SEO_GUIDE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
 BLOG_PROMPT_TEMPLATE = """\
 다음 주제로 블로그 포스트를 작성해줘.
-반드시 아래 형식을 따라줘:
+길이는 3000자 이상으로 아래 SEO 전략 가이드를 반드시 준수해줘.
+
+--- SEO 전략 가이드 시작 ---
+{seo_guide}
+--- SEO 전략 가이드 끝 ---
+
+그리고 반드시 아래 형식을 따라줘:
 
 # 제목
 
@@ -194,6 +212,37 @@ BLOG_PROMPT_TEMPLATE = """\
 주제: {topic}"""
 
 
+def build_reference_blocks(references: list, citations: dict, source_title_map: dict) -> list:
+    """
+    Build Notion blocks for the references section.
+
+    Args:
+        references: List of {source_id, citation_number, cited_text?} dicts
+        citations: Dict mapping citation_number -> source_id
+        source_title_map: Dict mapping source_id -> source title
+
+    Returns:
+        List of (type, content) tuples to append to blocks
+    """
+    if not citations:
+        return []
+
+    ref_blocks = [("heading_2", "참고문헌")]
+    for ref in references:
+        num = ref["citation_number"]
+        source_id = ref["source_id"]
+        raw_title = source_title_map.get(source_id, source_id)
+        source_title = os.path.splitext(raw_title)[0]
+        cited_text = ref.get("cited_text", "")
+        if cited_text:
+            # Truncate long cited text to keep blocks readable
+            excerpt = cited_text[:300] + ("…" if len(cited_text) > 300 else "")
+            ref_blocks.append(("paragraph", f"[{num}] {source_title} — {excerpt}"))
+        else:
+            ref_blocks.append(("paragraph", f"[{num}] {source_title}"))
+    return ref_blocks
+
+
 def generate_blog(topic: str) -> dict:
     """
     Query NotebookLM with a blog-format prompt, parse the response,
@@ -205,7 +254,7 @@ def generate_blog(topic: str) -> dict:
     Returns:
         dict with title, slug, tags, notion_url, notion_id
     """
-    prompt = BLOG_PROMPT_TEMPLATE.replace("{topic}", topic)
+    prompt = BLOG_PROMPT_TEMPLATE.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
 
     client = get_client()
     result = chat.query(
@@ -215,11 +264,25 @@ def generate_blog(topic: str) -> dict:
         conversation_id=None,
     )
     response_text = result["answer"]
+    citations = result.get("citations", {})
+    references = result.get("references", [])
 
     parsed = parse_blog_response(response_text)
     title = parsed["title"]
     tags = parsed["tags"]
     blocks = parsed["blocks"]
+
+    # Build source title map from notebook metadata and append references section
+    if citations:
+        source_title_map = {}
+        try:
+            nb_detail = notebooks.get_notebook(client, NOTEBOOK_ID)
+            for src in nb_detail.get("sources", []):
+                source_title_map[src["id"]] = src["title"]
+        except Exception:
+            pass
+        blocks += build_reference_blocks(references, citations, source_title_map)
+
     slug = make_slug(title)
     if not slug:
         slug = date.today().isoformat()

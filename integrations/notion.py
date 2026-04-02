@@ -119,25 +119,63 @@ class NotionClient:
         return self.client.pages.update(page_id, **data)
 
 
+def _parse_inline_rich_text(text: str) -> list:
+    """
+    텍스트에서 인라인 코드(`code`)를 파싱해 Notion rich_text 리스트로 변환
+    """
+    import re
+    parts = re.split(r'`([^`]+)`', text)
+    rich_text = []
+    for idx, segment in enumerate(parts):
+        if not segment:
+            continue
+        if idx % 2 == 0:
+            rich_text.append({"type": "text", "text": {"content": segment}})
+        else:
+            rich_text.append({
+                "type": "text",
+                "text": {"content": segment},
+                "annotations": {"code": True}
+            })
+    return rich_text
+
+
 def create_notion_block_from_markdown(markdown: str) -> list:
     """
     Markdown을 Notion block으로 변환
-    
+
     Args:
         markdown: 마크다운 텍스트
-    
+
     Returns:
         Notion block 목록
     """
+    import re
     blocks = []
     lines = markdown.split("\n")
-    
+
     i = 0
     while i < len(lines):
         line = lines[i]
-        
+
+        # fenced code block
+        if line.startswith("```"):
+            lang = line[3:].strip() or "plain text"
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            blocks.append({
+                "object": "block",
+                "type": "code",
+                "code": {
+                    "rich_text": [{"type": "text", "text": {"content": "\n".join(code_lines)}}],
+                    "language": lang
+                }
+            })
         # 제목
-        if line.startswith("# "):
+        elif line.startswith("# "):
             blocks.append({
                 "object": "block",
                 "type": "heading_1",
@@ -160,14 +198,14 @@ def create_notion_block_from_markdown(markdown: str) -> list:
             blocks.append({
                 "object": "block",
                 "type": "bulleted_list_item",
-                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": line[2:].strip()}}]}
+                "bulleted_list_item": {"rich_text": _parse_inline_rich_text(line[2:].strip())}
             })
         # 번호 목록
         elif line.strip().startswith(("1.", "2.", "3.", "4.", "5.")):
             blocks.append({
                 "object": "block",
                 "type": "numbered_list_item",
-                "numbered_list_item": {"rich_text": [{"type": "text", "text": {"content": line.strip()[2:].strip()}}]}
+                "numbered_list_item": {"rich_text": _parse_inline_rich_text(line.strip()[2:].strip())}
             })
         # 인용문
         elif line.startswith("> "):
@@ -181,8 +219,6 @@ def create_notion_block_from_markdown(markdown: str) -> list:
             })
         # 사진 (간단한 처리)
         elif line.startswith("![](") or line.startswith("![") or line.startswith("<img"):
-            # 이미지 URL 추출
-            import re
             url_match = re.search(r'\(([^)]+)\)', line)
             if url_match:
                 url = url_match.group(1)
@@ -198,16 +234,14 @@ def create_notion_block_from_markdown(markdown: str) -> list:
                 "type": "paragraph",
                 "paragraph": {"rich_text": []}
             })
-        # 일반 텍스트
+        # 일반 텍스트 (인라인 코드 포함)
         else:
             blocks.append({
                 "object": "block",
                 "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": line}}]
-                }
+                "paragraph": {"rich_text": _parse_inline_rich_text(line)}
             })
-        
+
         i += 1
-    
+
     return blocks
