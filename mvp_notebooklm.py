@@ -133,7 +133,12 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
                 "language": "yaml",
                 "rich_text": [{"type": "text", "text": {"content": f"cleanUrl: /posts/{slug}"}}],
             },
-        }
+        },
+        {
+            "object": "block",
+            "type": "table_of_contents",
+            "table_of_contents": {},
+        },
     ]
     for block_type, content in blocks:
         if block_type == "heading_2":
