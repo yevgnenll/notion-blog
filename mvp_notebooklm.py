@@ -36,6 +36,7 @@ from typing import Optional
 # Import the MCP client utilities
 from notebooklm_tools.mcp.tools._utils import get_client
 from notebooklm_tools.services import notebooks, chat
+from agent.fetch_references import fetch_references, print_references
 
 
 NOTEBOOK_ID = "b545cc09-cc49-4dd7-bd87-170c44c53ef6"
@@ -87,8 +88,18 @@ def parse_blog_response(text: str) -> dict:
         elif stripped.lower().startswith("태그:"):
             raw = stripped.split(":", 1)[1]
             tags = [t.strip() for t in raw.split(",") if t.strip()]
+        elif stripped.startswith("### "):
+            blocks.append(("heading_3", stripped[4:].strip()))
         elif stripped.startswith("## "):
             blocks.append(("heading_2", stripped[3:].strip()))
+        elif re.match(r'^\*\s+', stripped) or re.match(r'^-\s+', stripped):
+            # Bullet list: "* item" or "- item" (not "**bold**")
+            content = re.sub(r'^[*-]\s+', '', stripped)
+            blocks.append(("bulleted_list_item", content))
+        elif re.match(r'^\d+\.\s+', stripped):
+            # Numbered list: "1. item"
+            content = re.sub(r'^\d+\.\s+', '', stripped)
+            blocks.append(("numbered_list_item", content))
         else:
             blocks.append(("paragraph", stripped))
 
@@ -96,6 +107,45 @@ def parse_blog_response(text: str) -> dict:
         raise ValueError("No title found in NotebookLM response (expected '# title' line)")
 
     return {"title": title, "tags": tags, "blocks": blocks}
+
+
+def parse_inline_markdown(text: str) -> list:
+    """
+    Convert markdown inline syntax to Notion rich_text segments.
+
+    Handles: **bold**, *italic*, `code`, $latex$
+    Returns a list of Notion rich_text objects.
+    """
+    pattern = re.compile(
+        r'\*\*(.+?)\*\*'  # bold
+        r'|\*(.+?)\*'      # italic
+        r'|`(.+?)`'        # inline code
+        r'|\$(.+?)\$'      # latex equation
+    )
+
+    segments = []
+    last_end = 0
+
+    for match in pattern.finditer(text):
+        if match.start() > last_end:
+            segments.append({"type": "text", "text": {"content": text[last_end:match.start()]}})
+
+        bold, italic, code, latex = match.groups()
+        if bold:
+            segments.append({"type": "text", "text": {"content": bold}, "annotations": {"bold": True}})
+        elif italic:
+            segments.append({"type": "text", "text": {"content": italic}, "annotations": {"italic": True}})
+        elif code:
+            segments.append({"type": "text", "text": {"content": code}, "annotations": {"code": True}})
+        elif latex:
+            segments.append({"type": "equation", "equation": {"expression": latex}})
+
+        last_end = match.end()
+
+    if last_end < len(text):
+        segments.append({"type": "text", "text": {"content": text[last_end:]}})
+
+    return segments or [{"type": "text", "text": {"content": text}}]
 
 
 def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
@@ -141,17 +191,36 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
         },
     ]
     for block_type, content in blocks:
+        rich_text = parse_inline_markdown(content)
         if block_type == "heading_2":
             children.append({
                 "object": "block",
                 "type": "heading_2",
-                "heading_2": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+                "heading_2": {"rich_text": rich_text},
+            })
+        elif block_type == "heading_3":
+            children.append({
+                "object": "block",
+                "type": "heading_3",
+                "heading_3": {"rich_text": rich_text},
+            })
+        elif block_type == "bulleted_list_item":
+            children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": rich_text},
+            })
+        elif block_type == "numbered_list_item":
+            children.append({
+                "object": "block",
+                "type": "numbered_list_item",
+                "numbered_list_item": {"rich_text": rich_text},
             })
         else:
             children.append({
                 "object": "block",
                 "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+                "paragraph": {"rich_text": rich_text},
             })
 
     payload = {
@@ -278,15 +347,18 @@ def generate_blog(topic: str) -> dict:
     blocks = parsed["blocks"]
 
     # Build source title map from notebook metadata and append references section
+    print(f"[debug] citations count: {len(citations)}, references count: {len(references)}")
     if citations:
         source_title_map = {}
         try:
             nb_detail = notebooks.get_notebook(client, NOTEBOOK_ID)
             for src in nb_detail.get("sources", []):
                 source_title_map[src["id"]] = src["title"]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[debug] get_notebook failed: {e}")
         blocks += build_reference_blocks(references, citations, source_title_map)
+    else:
+        print("[debug] citations empty — reference section skipped")
 
     slug = make_slug(title)
     if not slug:
@@ -410,7 +482,26 @@ def query_notebook(notebook_id: Optional[str] = None):
             print("-" * 60)
             print(result["answer"])
             print("-" * 60)
-            
+
+            # Print references if available
+            if result.get("citations"):
+                print("\nReferences:")
+                refs = []
+                source_title_map = {}
+                try:
+                    nb_detail = notebooks.get_notebook(client, notebook_id)
+                    for src in nb_detail.get("sources", []):
+                        source_title_map[src["id"]] = os.path.splitext(src["title"])[0]
+                except Exception:
+                    pass
+                for ref in result.get("references", []):
+                    refs.append({
+                        "citation_number": ref["citation_number"],
+                        "source_title": source_title_map.get(ref["source_id"], ref["source_id"]),
+                        "cited_text": ref.get("cited_text", ""),
+                    })
+                print_references(refs)
+
             # Update conversation_id for follow-up questions
             if result.get("conversation_id"):
                 conversation_id = result["conversation_id"]
