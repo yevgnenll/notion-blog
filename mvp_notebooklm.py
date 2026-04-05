@@ -242,6 +242,10 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
         "children": children,
     }
 
+    CHUNK_SIZE = 100
+
+    # 첫 요청: 페이지 생성 (최대 100개 블록)
+    payload["children"] = children[:CHUNK_SIZE]
     resp = requests.post(
         "https://api.notion.com/v1/pages",
         headers=headers,
@@ -249,7 +253,21 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     )
     if not resp.ok:
         raise ValueError(f"Notion API error {resp.status_code}: {resp.text}")
-    return resp.json()
+    page = resp.json()
+
+    # 나머지 블록을 100개씩 append
+    remaining = children[CHUNK_SIZE:]
+    while remaining:
+        chunk, remaining = remaining[:CHUNK_SIZE], remaining[CHUNK_SIZE:]
+        append_resp = requests.patch(
+            f"https://api.notion.com/v1/blocks/{page['id']}/children",
+            headers=headers,
+            json={"children": chunk},
+        )
+        if not append_resp.ok:
+            raise ValueError(f"Notion API error (append) {append_resp.status_code}: {append_resp.text}")
+
+    return page
 
 
 _SEO_GUIDE_PATH = Path(__file__).parent / "docs" / "seo-strategy.md"
@@ -285,6 +303,30 @@ BLOG_PROMPT_TEMPLATE = """\
 
 주제: {topic}"""
 
+BLOG_PROMPT_TEMPLATE_EN = """\
+IMPORTANT: You MUST write the ENTIRE response in ENGLISH only. Do not use Korean anywhere.
+
+Write a blog post on the following topic.
+The post must be at least 2000 words and strictly follow the SEO strategy guide below.
+
+--- SEO STRATEGY GUIDE START ---
+{seo_guide}
+--- SEO STRATEGY GUIDE END ---
+
+Follow this exact format (all content in English):
+
+# Title
+
+태그: tag1, tag2, tag3
+
+## Section 1
+Content...
+
+## Section 2
+Content...
+
+Topic: {topic}"""
+
 
 def build_reference_blocks(references: list, citations: dict, source_title_map: dict) -> list:
     """
@@ -317,18 +359,20 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     return ref_blocks
 
 
-def generate_blog(topic: str) -> dict:
+def generate_blog(topic: str, lang: str = "ko") -> dict:
     """
     Query NotebookLM with a blog-format prompt, parse the response,
     and publish to Notion.
 
     Args:
         topic: Blog post topic
+        lang: Language code — "ko" (Korean) or "en" (English)
 
     Returns:
         dict with title, slug, tags, notion_url, notion_id
     """
-    prompt = BLOG_PROMPT_TEMPLATE.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
+    template = BLOG_PROMPT_TEMPLATE_EN if lang == "en" else BLOG_PROMPT_TEMPLATE
+    prompt = template.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
 
     client = get_client()
     result = chat.query(
@@ -373,6 +417,25 @@ def generate_blog(topic: str) -> dict:
         "notion_url": page.get("url", ""),
         "notion_id": page.get("id", ""),
     }
+
+
+def generate_blog_bilingual(topic: str) -> dict:
+    """
+    한글/영어 블로그 포스트를 순차적으로 생성해 각각 Notion에 게시한다.
+
+    Args:
+        topic: Blog post topic (used for both languages)
+
+    Returns:
+        dict with ko/en results
+    """
+    print("  [1/2] 한글 버전 생성 중...")
+    ko_result = generate_blog(topic, lang="ko")
+
+    print("  [2/2] 영어 버전 생성 중...")
+    en_result = generate_blog(topic, lang="en")
+
+    return {"ko": ko_result, "en": en_result}
 
 
 def print_header(title: str):
@@ -598,9 +661,9 @@ Examples:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["list", "create", "query", "add", "blog", "help"],
+        choices=["list", "create", "query", "add", "blog", "bilingual", "help"],
         default="help",
-        help="Command to run: list, create, query, add, blog, help"
+        help="Command to run: list, create, query, add, blog, bilingual, help"
     )
     parser.add_argument(
         "args",
@@ -637,6 +700,27 @@ Examples:
             print(f"  슬러그: {result['slug']}")
             print(f"  태그:  {', '.join(result['tags'])}")
             print(f"  URL:  {result['notion_url']}")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    elif args.command == "bilingual":
+        topic = args.args[0] if args.args else input("블로그 주제를 입력하세요: ").strip()
+        if not topic:
+            print("주제가 필요합니다.")
+            sys.exit(1)
+        print_header(f"한글/영어 블로그 생성: {topic}")
+        try:
+            result = generate_blog_bilingual(topic)
+            ko, en = result["ko"], result["en"]
+            print(f"\n✓ 두 버전 모두 Notion에 게시되었습니다!")
+            print(f"\n  [한글]")
+            print(f"  제목:  {ko['title']}")
+            print(f"  슬러그: {ko['slug']}")
+            print(f"  URL:  {ko['notion_url']}")
+            print(f"\n  [English]")
+            print(f"  Title: {en['title']}")
+            print(f"  Slug:  {en['slug']}")
+            print(f"  URL:  {en['notion_url']}")
         except Exception as e:
             print(f"Error: {e}")
             sys.exit(1)
