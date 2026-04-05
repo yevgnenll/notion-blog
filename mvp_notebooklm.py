@@ -76,11 +76,47 @@ def parse_blog_response(text: str) -> dict:
     title = None
     tags = []
     blocks = []
+    in_code_block = False
+    code_lines: list = []
+    after_blank = False  # 빈 줄 이후 여부 (리스트 컨텍스트 초기화용)
 
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped:
+
+        # 코드 블록 내부: ``` 닫힘 줄까지 내용 수집
+        if in_code_block:
+            if stripped.startswith("```"):
+                blocks.append(("code", "\n".join(code_lines)))
+                in_code_block = False
+                code_lines = []
+            else:
+                code_lines.append(line)
             continue
+
+        # 코드 블록 시작
+        if stripped.startswith("```"):
+            in_code_block = True
+            code_lines = []
+            continue
+
+        if not stripped:
+            after_blank = True  # 빈 줄 → 리스트 컨텍스트 초기화
+            continue
+        # 빈 줄 없이 이어지는 줄이 리스트 항목의 continuation인지 확인
+        if (
+            not after_blank
+            and blocks
+            and blocks[-1][0] in ("numbered_list_item", "bulleted_list_item")
+            and not re.match(r'^[#*\-`]', stripped)
+            and not re.match(r'^\d+\.\s+', stripped)
+            and not stripped.lower().startswith("태그:")
+        ):
+            last_type, last_content = blocks[-1]
+            blocks[-1] = (last_type, last_content + " " + stripped)
+            continue
+
+        after_blank = False  # 일반 줄 처리 시 리셋
+
         if stripped.startswith("# ") and title is None:
             title = stripped[2:].strip()
         elif stripped.startswith("# "):
@@ -93,11 +129,9 @@ def parse_blog_response(text: str) -> dict:
         elif stripped.startswith("## "):
             blocks.append(("heading_2", stripped[3:].strip()))
         elif re.match(r'^\*\s+', stripped) or re.match(r'^-\s+', stripped):
-            # Bullet list: "* item" or "- item" (not "**bold**")
             content = re.sub(r'^[*-]\s+', '', stripped)
             blocks.append(("bulleted_list_item", content))
         elif re.match(r'^\d+\.\s+', stripped):
-            # Numbered list: "1. item"
             content = re.sub(r'^\d+\.\s+', '', stripped)
             blocks.append(("numbered_list_item", content))
         else:
@@ -203,6 +237,15 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
                 "object": "block",
                 "type": "heading_3",
                 "heading_3": {"rich_text": rich_text},
+            })
+        elif block_type == "code":
+            children.append({
+                "object": "block",
+                "type": "code",
+                "code": {
+                    "language": "plain text",
+                    "rich_text": [{"type": "text", "text": {"content": content}}],
+                },
             })
         elif block_type == "bulleted_list_item":
             children.append({
@@ -328,7 +371,7 @@ Content...
 Topic: {topic}"""
 
 
-def build_reference_blocks(references: list, citations: dict, source_title_map: dict) -> list:
+def build_reference_blocks(references: list, citations: dict, source_title_map: dict, lang: str = "ko") -> list:
     """
     Build Notion blocks for the references section.
 
@@ -343,7 +386,8 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     if not citations:
         return []
 
-    ref_blocks = [("heading_2", "참고문헌")]
+    heading = "References" if lang == "en" else "참고문헌"
+    ref_blocks = [("heading_2", heading)]
     for ref in references:
         num = ref["citation_number"]
         source_id = ref["source_id"]
@@ -400,7 +444,7 @@ def generate_blog(topic: str, lang: str = "ko") -> dict:
                 source_title_map[src["id"]] = src["title"]
         except Exception as e:
             print(f"[debug] get_notebook failed: {e}")
-        blocks += build_reference_blocks(references, citations, source_title_map)
+        blocks += build_reference_blocks(references, citations, source_title_map, lang=lang)
     else:
         print("[debug] citations empty — reference section skipped")
 
