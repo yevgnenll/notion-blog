@@ -9,7 +9,7 @@ from notebooklm_tools.mcp.tools._utils import get_client
 from notebooklm_tools.services import chat, notebooks
 
 
-NOTEBOOK_ID = "b545cc09-cc49-4dd7-bd87-170c44c53ef6"
+NOTEBOOK_ID = os.environ.get("NOTEBOOKLM_NOTEBOOK_ID", "")
 
 
 def fetch_references(query: str, notebook_id: str = NOTEBOOK_ID) -> list[dict]:

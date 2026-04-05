@@ -39,7 +39,7 @@ from notebooklm_tools.services import notebooks, chat
 from agent.fetch_references import fetch_references, print_references
 
 
-NOTEBOOK_ID = "b545cc09-cc49-4dd7-bd87-170c44c53ef6"
+NOTEBOOK_ID = os.environ.get("NOTEBOOKLM_NOTEBOOK_ID", "")
 
 
 def make_slug(title: str) -> str:
