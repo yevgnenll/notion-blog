@@ -35,6 +35,17 @@ def test_parse_tags():
     result = parse_blog_response(SAMPLE_RESPONSE)
     assert result["tags"] == ["기술", "과학", "컴퓨팅"]
 
+def test_parse_tags_en():
+    SAMPLE_RESPONSE_EN = """# The Future of Quantum Computing
+
+Tags: technology, science, computing
+
+## Introduction
+Quantum computing goes beyond the limits of classical computing.
+"""
+    result = parse_blog_response(SAMPLE_RESPONSE_EN)
+    assert result["tags"] == ["technology", "science", "computing"]
+
 def test_parse_blocks_count():
     result = parse_blog_response(SAMPLE_RESPONSE)
     # Two heading_2 + two paragraph blocks
@@ -89,7 +100,7 @@ def test_post_to_notion_sends_correct_payload():
 
     # Check properties
     props = payload["properties"]
-    assert props["Name"]["title"][0]["text"]["content"] == "양자컴퓨팅의 미래"
+    assert props["제목"]["title"][0]["text"]["content"] == "양자컴퓨팅의 미래"
     assert props["태그"]["multi_select"] == [{"name": "기술"}, {"name": "과학"}]
     assert props["공개여부"]["checkbox"] is False
 
@@ -99,9 +110,10 @@ def test_post_to_notion_sends_correct_payload():
     assert children[0]["code"]["language"] == "yaml"
     assert "cleanUrl: /posts/quantum-computing-future" in children[0]["code"]["rich_text"][0]["text"]["content"]
 
-    # Check heading_2 block
-    assert children[1]["type"] == "heading_2"
-    assert children[2]["type"] == "paragraph"
+    # Check heading_2 block (now at index 2 because index 1 is table_of_contents)
+    assert children[1]["type"] == "table_of_contents"
+    assert children[2]["type"] == "heading_2"
+    assert children[3]["type"] == "paragraph"
 
 
 from mvp_notebooklm import generate_blog

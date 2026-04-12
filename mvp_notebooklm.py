@@ -109,7 +109,7 @@ def parse_blog_response(text: str) -> dict:
             and blocks[-1][0] in ("numbered_list_item", "bulleted_list_item")
             and not re.match(r'^[#*\-`]', stripped)
             and not re.match(r'^\d+\.\s+', stripped)
-            and not stripped.lower().startswith("태그:")
+            and not re.match(r'^(태그|tags)\s*:', stripped, re.IGNORECASE)
         ):
             last_type, last_content = blocks[-1]
             blocks[-1] = (last_type, last_content + " " + stripped)
@@ -121,8 +121,8 @@ def parse_blog_response(text: str) -> dict:
             title = stripped[2:].strip()
         elif stripped.startswith("# "):
             blocks.append(("paragraph", stripped[2:].strip()))
-        elif stripped.lower().startswith("태그:"):
-            raw = stripped.split(":", 1)[1]
+        elif re.match(r'^(태그|tags)\s*:', stripped, re.IGNORECASE):
+            raw = re.split(r':', stripped, 1)[1]
             tags = [t.strip() for t in raw.split(",") if t.strip()]
         elif stripped.startswith("### "):
             blocks.append(("heading_3", stripped[4:].strip()))
@@ -742,7 +742,7 @@ Examples:
             print(f"\n✓ 블로그 포스트가 Notion에 게시되었습니다!")
             print(f"  제목:  {result['title']}")
             print(f"  슬러그: {result['slug']}")
-            print(f"  태그:  {', '.join(result['tags'])}")
+            print(f"  Tags:  {', '.join(result['tags'])}")
             print(f"  URL:  {result['notion_url']}")
         except Exception as e:
             print(f"Error: {e}")
