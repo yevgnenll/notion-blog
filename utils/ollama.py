@@ -23,7 +23,7 @@ def translate_title_to_slug(
         영문 slug 문자열. 실패 시 빈 문자열 반환.
     """
     host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    model = model or os.environ.get("OLLAMA_MODEL", "qwen3-coder:30b")
+    model = model or os.environ.get("OLLAMA_MODEL", "gemma4-openclaw:latest")
 
     resp = requests.post(
         f"{host}/api/generate",

@@ -403,7 +403,13 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     return ref_blocks
 
 
-def generate_blog(topic: str, lang: str = "ko") -> dict:
+def generate_blog(
+    topic: str,
+    lang: str = "ko",
+    fallback_citations: Optional[dict] = None,
+    fallback_references: Optional[list] = None,
+    slug_override: str = "",
+) -> dict:
     """
     Query NotebookLM with a blog-format prompt, parse the response,
     and publish to Notion.
@@ -411,9 +417,12 @@ def generate_blog(topic: str, lang: str = "ko") -> dict:
     Args:
         topic: Blog post topic
         lang: Language code — "ko" (Korean) or "en" (English)
+        fallback_citations: Use these citations if the query returns none
+        fallback_references: Use these references if the query returns none
+        slug_override: Use this slug instead of deriving one from the title
 
     Returns:
-        dict with title, slug, tags, notion_url, notion_id
+        dict with title, slug, tags, notion_url, notion_id, citations, references
     """
     template = BLOG_PROMPT_TEMPLATE_EN if lang == "en" else BLOG_PROMPT_TEMPLATE
     prompt = template.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
@@ -428,6 +437,12 @@ def generate_blog(topic: str, lang: str = "ko") -> dict:
     response_text = result["answer"]
     citations = result.get("citations", {})
     references = result.get("references", [])
+
+    # Fall back to provided citations when this query returned none
+    if not citations and fallback_citations:
+        citations = fallback_citations
+        references = fallback_references or []
+        print(f"[debug] using fallback citations: {len(citations)}")
 
     parsed = parse_blog_response(response_text)
     title = parsed["title"]
@@ -448,7 +463,7 @@ def generate_blog(topic: str, lang: str = "ko") -> dict:
     else:
         print("[debug] citations empty — reference section skipped")
 
-    slug = make_slug(title)
+    slug = slug_override or make_slug(title)
     if not slug:
         slug = date.today().isoformat()
 
@@ -460,6 +475,8 @@ def generate_blog(topic: str, lang: str = "ko") -> dict:
         "tags": tags,
         "notion_url": page.get("url", ""),
         "notion_id": page.get("id", ""),
+        "citations": citations,
+        "references": references,
     }
 
 
@@ -473,11 +490,21 @@ def generate_blog_bilingual(topic: str) -> dict:
     Returns:
         dict with ko/en results
     """
+    # Pre-compute slug from ASCII keywords in the topic so that if the Korean
+    # title cannot be translated by Ollama the slug is still meaningful.
+    topic_ascii = re.sub(r"[^a-z0-9\s-]", "", topic.lower().strip())
+    topic_ascii = re.sub(r"[\s-]+", "-", topic_ascii).strip("-")
+
     print("  [1/2] 한글 버전 생성 중...")
-    ko_result = generate_blog(topic, lang="ko")
+    ko_result = generate_blog(topic, lang="ko", slug_override=topic_ascii or "")
 
     print("  [2/2] 영어 버전 생성 중...")
-    en_result = generate_blog(topic, lang="en")
+    en_result = generate_blog(
+        topic,
+        lang="en",
+        fallback_citations=ko_result.get("citations"),
+        fallback_references=ko_result.get("references"),
+    )
 
     return {"ko": ko_result, "en": en_result}
 
