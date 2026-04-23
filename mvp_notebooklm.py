@@ -183,6 +183,48 @@ def parse_inline_markdown(text: str) -> list:
     return segments or [{"type": "text", "text": {"content": text}}]
 
 
+def _upload_cover_image(image_url: str, api_key: str) -> str | None:
+    """
+    NotebookLM 이미지 URL에서 다운로드한 뒤 Notion에 업로드.
+
+    Returns:
+        file_upload_id string, or None on failure
+    """
+    # file_uploads API는 2024-05-15 이상 필요
+    upload_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2024-05-15",
+    }
+
+    # 1. 이미지 다운로드
+    img_resp = requests.get(image_url, timeout=30)
+    img_resp.raise_for_status()
+    content_type = img_resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+    ext = content_type.split("/")[-1]
+    filename = f"blog-cover.{ext}"
+
+    # 2. Notion 이미지 슬롯 생성 (single_part = 20MB 이하 이미지용)
+    create_resp = requests.post(
+        "https://api.notion.com/v1/file_uploads",
+        headers=upload_headers,
+        json={"filename": filename, "content_type": content_type, "mode": "single_part"},
+    )
+    create_resp.raise_for_status()
+    upload_data = create_resp.json()
+    file_upload_id = upload_data["id"]
+    upload_url = upload_data["upload_url"]
+
+    # 3. presigned S3 URL에 이미지 업로드 (multipart/form-data, 인증 헤더 불필요)
+    upload_resp = requests.post(
+        upload_url,
+        files={"file": (filename, img_resp.content, content_type)},
+    )
+    upload_resp.raise_for_status()
+
+    return file_upload_id
+
+
 def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: str = "") -> dict:
     """
     Create a Notion page via REST API.
@@ -192,7 +234,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: s
         tags: List of tag strings
         blocks: List of (type, content) tuples — ("heading_2"|"paragraph", text)
         slug: URL slug for cleanUrl code block
-        cover_url: External image URL for page cover and first image block
+        cover_url: Image URL to download and upload to Notion as cover and image block
 
     Returns:
         Created page dict (id, url, ...)
@@ -210,13 +252,27 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: s
         "Notion-Version": "2022-06-28",
     }
 
+    # 이미지를 Notion에 업로드해 file_upload_id 획득 (실패 시 external URL 폴백)
+    file_upload_id = None
+    if cover_url:
+        try:
+            file_upload_id = _upload_cover_image(cover_url, api_key)
+            print(f"[image] Notion 업로드 완료 (id={file_upload_id[:8]}...)")
+        except Exception as e:
+            print(f"[image] Notion 업로드 실패, external URL로 대체: {e}")
+
+    def _image_obj() -> dict:
+        if file_upload_id:
+            return {"type": "file_upload", "file_upload": {"id": file_upload_id}}
+        return {"type": "external", "external": {"url": cover_url}}
+
     # Build content blocks
     children = []
     if cover_url:
         children.append({
             "object": "block",
             "type": "image",
-            "image": {"type": "external", "external": {"url": cover_url}},
+            "image": _image_obj(),
         })
     children += [
         {
@@ -277,7 +333,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: s
 
     payload = {
         "parent": {"type": "database_id", "database_id": database_id},
-        **({"cover": {"type": "external", "external": {"url": cover_url}}} if cover_url else {}),
+        **({"cover": _image_obj()} if cover_url else {}),
         "properties": {
             "제목": {
                 "title": [{"type": "text", "text": {"content": title}}]
@@ -413,25 +469,7 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     return ref_blocks
 
 
-_TRANSIENT_CODES = ("502", "503", "504")
-_RETRY_BASE_DELAY = 5  # seconds
-
-
-def _with_retry(fn, max_attempts: int = 5):
-    """
-    Exponential backoff retry for transient HTTP errors (502/503/504).
-    Delays: 5s, 10s, 20s, 40s between attempts.
-    """
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except Exception as e:
-            is_transient = any(code in str(e) for code in _TRANSIENT_CODES)
-            if not is_transient or attempt == max_attempts - 1:
-                raise
-            delay = _RETRY_BASE_DELAY * (2 ** attempt)
-            print(f"[retry] {attempt + 1}/{max_attempts} 실패 ({str(e)[:80]}) — {delay}s 후 재시도")
-            time.sleep(delay)
+from utils.retry import with_retry as _with_retry
 
 
 def _fetch_blog_text(topic: str, lang: str) -> dict:

@@ -1,6 +1,8 @@
 """NotebookLM infographic 생성 및 URL 획득"""
 import time
 
+from utils.retry import with_retry
+
 _POLL_INTERVAL = 5   # seconds between polls
 _MAX_POLLS = 36      # up to 3 minutes total
 
@@ -17,7 +19,7 @@ def create_and_wait(notebook_id: str, topic: str) -> str | None:
 
     client = get_client()
     try:
-        result = studio.create_artifact(
+        result = with_retry(lambda: studio.create_artifact(
             client,
             notebook_id,
             "infographic",
@@ -25,7 +27,7 @@ def create_and_wait(notebook_id: str, topic: str) -> str | None:
             language="en",
             orientation="landscape",
             detail_level="standard",
-        )
+        ))
     except Exception as e:
         print(f"[infographic] 생성 요청 실패: {e}")
         return None
@@ -40,7 +42,7 @@ def create_and_wait(notebook_id: str, topic: str) -> str | None:
     for i in range(_MAX_POLLS):
         time.sleep(_POLL_INTERVAL)
         try:
-            artifacts = client.poll_studio_status(notebook_id)
+            artifacts = with_retry(lambda: client.poll_studio_status(notebook_id))
             for a in artifacts:
                 if a.get("artifact_id") != artifact_id:
                     continue
@@ -56,7 +58,7 @@ def create_and_wait(notebook_id: str, topic: str) -> str | None:
                     print("[infographic] 생성 실패")
                     return None
         except Exception as e:
-            print(f"[infographic] 폴링 오류: {e}")
+            print(f"[infographic] 폴링 오류 (스킵): {e}")
 
         elapsed = (i + 1) * _POLL_INTERVAL
         print(f"[infographic] 대기 중... ({elapsed}s / {_MAX_POLLS * _POLL_INTERVAL}s)")
