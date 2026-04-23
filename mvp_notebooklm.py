@@ -28,6 +28,7 @@ import sys
 import json
 import argparse
 import re
+import time
 import requests
 from pathlib import Path
 from datetime import date
@@ -182,7 +183,7 @@ def parse_inline_markdown(text: str) -> list:
     return segments or [{"type": "text", "text": {"content": text}}]
 
 
-def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
+def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: str = "") -> dict:
     """
     Create a Notion page via REST API.
 
@@ -191,6 +192,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
         tags: List of tag strings
         blocks: List of (type, content) tuples — ("heading_2"|"paragraph", text)
         slug: URL slug for cleanUrl code block
+        cover_url: External image URL for page cover and first image block
 
     Returns:
         Created page dict (id, url, ...)
@@ -209,7 +211,14 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
     }
 
     # Build content blocks
-    children = [
+    children = []
+    if cover_url:
+        children.append({
+            "object": "block",
+            "type": "image",
+            "image": {"type": "external", "external": {"url": cover_url}},
+        })
+    children += [
         {
             "object": "block",
             "type": "code",
@@ -268,6 +277,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str) -> dict:
 
     payload = {
         "parent": {"type": "database_id", "database_id": database_id},
+        **({"cover": {"type": "external", "external": {"url": cover_url}}} if cover_url else {}),
         "properties": {
             "제목": {
                 "title": [{"type": "text", "text": {"content": title}}]
@@ -403,57 +413,85 @@ def build_reference_blocks(references: list, citations: dict, source_title_map: 
     return ref_blocks
 
 
-def generate_blog(
-    topic: str,
-    lang: str = "ko",
-    fallback_citations: Optional[dict] = None,
-    fallback_references: Optional[list] = None,
-    slug_override: str = "",
-) -> dict:
-    """
-    Query NotebookLM with a blog-format prompt, parse the response,
-    and publish to Notion.
+_TRANSIENT_CODES = ("502", "503", "504")
+_RETRY_BASE_DELAY = 5  # seconds
 
-    Args:
-        topic: Blog post topic
-        lang: Language code — "ko" (Korean) or "en" (English)
-        fallback_citations: Use these citations if the query returns none
-        fallback_references: Use these references if the query returns none
-        slug_override: Use this slug instead of deriving one from the title
+
+def _with_retry(fn, max_attempts: int = 5):
+    """
+    Exponential backoff retry for transient HTTP errors (502/503/504).
+    Delays: 5s, 10s, 20s, 40s between attempts.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as e:
+            is_transient = any(code in str(e) for code in _TRANSIENT_CODES)
+            if not is_transient or attempt == max_attempts - 1:
+                raise
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            print(f"[retry] {attempt + 1}/{max_attempts} 실패 ({str(e)[:80]}) — {delay}s 후 재시도")
+            time.sleep(delay)
+
+
+def _fetch_blog_text(topic: str, lang: str) -> dict:
+    """
+    NotebookLM에 블로그 텍스트를 요청하고 파싱. Notion 게시는 하지 않음.
 
     Returns:
-        dict with title, slug, tags, notion_url, notion_id, citations, references
+        dict with title, tags, blocks, citations, references
     """
     template = BLOG_PROMPT_TEMPLATE_EN if lang == "en" else BLOG_PROMPT_TEMPLATE
     prompt = template.replace("{seo_guide}", _load_seo_guide()).replace("{topic}", topic)
 
     client = get_client()
-    result = chat.query(
+    result = _with_retry(lambda: chat.query(
         client,
         notebook_id=NOTEBOOK_ID,
         query_text=prompt,
         conversation_id=None,
-    )
-    response_text = result["answer"]
-    citations = result.get("citations", {})
-    references = result.get("references", [])
+    ))
+    parsed = parse_blog_response(result["answer"])
+    return {
+        "title": parsed["title"],
+        "tags": parsed["tags"],
+        "blocks": parsed["blocks"],
+        "citations": result.get("citations", {}),
+        "references": result.get("references", []),
+    }
 
-    # Fall back to provided citations when this query returned none
+
+def _publish_blog(
+    fetched: dict,
+    lang: str,
+    slug: str,
+    fallback_citations: Optional[dict] = None,
+    fallback_references: Optional[list] = None,
+    cover_url: str = "",
+) -> dict:
+    """
+    파싱된 블로그 데이터를 Notion에 게시.
+
+    Returns:
+        dict with title, slug, tags, notion_url, notion_id, citations, references
+    """
+    citations = fetched["citations"]
+    references = fetched["references"]
+
     if not citations and fallback_citations:
         citations = fallback_citations
         references = fallback_references or []
         print(f"[debug] using fallback citations: {len(citations)}")
 
-    parsed = parse_blog_response(response_text)
-    title = parsed["title"]
-    tags = parsed["tags"]
-    blocks = parsed["blocks"]
+    title = fetched["title"]
+    tags = fetched["tags"]
+    blocks = list(fetched["blocks"])
 
-    # Build source title map from notebook metadata and append references section
     print(f"[debug] citations count: {len(citations)}, references count: {len(references)}")
     if citations:
         source_title_map = {}
         try:
+            client = get_client()
             nb_detail = notebooks.get_notebook(client, NOTEBOOK_ID)
             for src in nb_detail.get("sources", []):
                 source_title_map[src["id"]] = src["title"]
@@ -463,11 +501,7 @@ def generate_blog(
     else:
         print("[debug] citations empty — reference section skipped")
 
-    slug = slug_override or make_slug(title)
-    if not slug:
-        slug = date.today().isoformat()
-
-    page = post_to_notion(title=title, tags=tags, blocks=blocks, slug=slug)
+    page = post_to_notion(title=title, tags=tags, blocks=blocks, slug=slug, cover_url=cover_url)
 
     return {
         "title": title,
@@ -480,9 +514,43 @@ def generate_blog(
     }
 
 
+def generate_blog(
+    topic: str,
+    lang: str = "ko",
+    fallback_citations: Optional[dict] = None,
+    fallback_references: Optional[list] = None,
+    slug_override: str = "",
+    cover_url: str = "",
+) -> dict:
+    """
+    NotebookLM에서 블로그를 생성하고 Notion에 게시.
+
+    Args:
+        topic: Blog post topic
+        lang: Language code — "ko" (Korean) or "en" (English)
+        fallback_citations: Use these citations if the query returns none
+        fallback_references: Use these references if the query returns none
+        slug_override: Use this slug instead of deriving one from the title
+        cover_url: External image URL for page cover and image block
+
+    Returns:
+        dict with title, slug, tags, notion_url, notion_id, citations, references
+    """
+    fetched = _fetch_blog_text(topic, lang)
+    slug = slug_override or make_slug(fetched["title"]) or date.today().isoformat()
+    return _publish_blog(
+        fetched,
+        lang=lang,
+        slug=slug,
+        fallback_citations=fallback_citations,
+        fallback_references=fallback_references,
+        cover_url=cover_url,
+    )
+
+
 def generate_blog_bilingual(topic: str) -> dict:
     """
-    한글/영어 블로그 포스트를 순차적으로 생성해 각각 Notion에 게시한다.
+    인포그래픽·한글·영어 블로그를 병렬로 생성한 뒤 각각 Notion에 게시.
 
     Args:
         topic: Blog post topic (used for both languages)
@@ -490,20 +558,38 @@ def generate_blog_bilingual(topic: str) -> dict:
     Returns:
         dict with ko/en results
     """
-    # Pre-compute slug from ASCII keywords in the topic so that if the Korean
-    # title cannot be translated by Ollama the slug is still meaningful.
+    from concurrent.futures import ThreadPoolExecutor
+    from utils.infographic import create_and_wait
+
     topic_ascii = re.sub(r"[^a-z0-9\s-]", "", topic.lower().strip())
     topic_ascii = re.sub(r"[\s-]+", "-", topic_ascii).strip("-")
 
-    print("  [1/2] 한글 버전 생성 중...")
-    ko_result = generate_blog(topic, lang="ko", slug_override=topic_ascii or "")
+    print("  [병렬] 인포그래픽 + 한글/영어 블로그 텍스트 동시 생성 중...")
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        infographic_future = executor.submit(create_and_wait, NOTEBOOK_ID, topic)
+        ko_future = executor.submit(_fetch_blog_text, topic, "ko")
+        en_future = executor.submit(_fetch_blog_text, topic, "en")
 
-    print("  [2/2] 영어 버전 생성 중...")
-    en_result = generate_blog(
-        topic,
+        ko_fetched = ko_future.result()
+        print("  [1/3] 한글 블로그 텍스트 완료")
+        en_fetched = en_future.result()
+        print("  [2/3] 영어 블로그 텍스트 완료")
+        cover_url = infographic_future.result() or ""
+        if cover_url:
+            print("  [3/3] 인포그래픽 완료!")
+        else:
+            print("  [3/3] 인포그래픽 실패 — 이미지 없이 진행")
+
+    ko_slug = topic_ascii or make_slug(ko_fetched["title"]) or date.today().isoformat()
+    ko_result = _publish_blog(ko_fetched, lang="ko", slug=ko_slug, cover_url=cover_url)
+
+    en_result = _publish_blog(
+        en_fetched,
         lang="en",
+        slug=make_slug(en_fetched["title"]) or date.today().isoformat(),
         fallback_citations=ko_result.get("citations"),
         fallback_references=ko_result.get("references"),
+        cover_url=cover_url,
     )
 
     return {"ko": ko_result, "en": en_result}
