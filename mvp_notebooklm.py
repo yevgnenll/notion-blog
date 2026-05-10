@@ -267,14 +267,7 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: s
         return {"type": "external", "external": {"url": cover_url}}
 
     # Build content blocks
-    children = []
-    if cover_url:
-        children.append({
-            "object": "block",
-            "type": "image",
-            "image": _image_obj(),
-        })
-    children += [
+    children = [
         {
             "object": "block",
             "type": "code",
@@ -289,6 +282,12 @@ def post_to_notion(title: str, tags: list, blocks: list, slug: str, cover_url: s
             "table_of_contents": {},
         },
     ]
+    if cover_url:
+        children.append({
+            "object": "block",
+            "type": "image",
+            "image": _image_obj(),
+        })
     for block_type, content in blocks:
         rich_text = parse_inline_markdown(content)
         if block_type == "heading_2":
